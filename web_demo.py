@@ -1,10 +1,11 @@
 import gradio as gr
 import mdtex2html
-from model import getTokenizerAndModel
+from my_model import get_tokenizer_and_model
 
 """Override Chatbot.postprocess"""
 
-tokenizer, model = getTokenizerAndModel()
+tokenizer, model = get_tokenizer_and_model()
+
 
 def postprocess(self, y):
     if y is None:

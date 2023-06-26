@@ -7,11 +7,13 @@ import logging
 import os
 import json
 import sys
-from model import getTokenizerAndModel
+from my_model import get_tokenizer_and_model, torch_gc
 
+# 对话历史数上限
+MAX_HISTORY = 64
 
-# 超参数 用于控制模型回复时 上文的长度
-MAX_HISTORY = 32
+# 默认文本长度上限
+DEFAULT_MAX_LENGTH = 512
 
 # 中断控制
 allow_generate = [True]
@@ -40,11 +42,12 @@ def getLogger(name, file_name, use_formatter=True):
 
 
 logger = getLogger("ChatGLM", "chatlog.log")
+sessionIndexHandle = [0]
 
 
 # 接入FastAPI
 def start_server(quantize_level, http_address: str, port: int):
-    tokenizer, model = getTokenizerAndModel(quantize_level)
+    tokenizer, model = get_tokenizer_and_model(quantize_level)
 
     app = FastAPI()
     app.add_middleware(
@@ -55,62 +58,70 @@ def start_server(quantize_level, http_address: str, port: int):
         allow_headers=["*"],
     )
 
+    def alertError(e, sessionIndex):
+        logger.error(f"Error {sessionIndex}: {e}")
+        yield f"data: {e}\n\n"
+
+    def decorate(generator, sessionIndex):
+        lastStr = ""
+        for item in generator:
+            lastStr = item[0]
+            yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        logger.info("Output {} - {}".format(sessionIndex, {"response": lastStr}))
+
     @app.get("/")
     def index():
         return {"message": "Server started", "success": True}
 
     @app.post("/stream")
     def continue_question_stream(arg_dict: dict):
-        def decorate(generator):
-            for item in generator:
-                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-
-        # inputs = [query, answer_prefix, max_length, top_p, temperature, allow_generate, history]
+        sessionIndexHandle[0] += 1
+        sessionIndex = sessionIndexHandle[0]
         try:
-            query = arg_dict["query"]
-            answer_prefix = arg_dict.get("answer_prefix", "")
-            max_length = arg_dict.get("max_length", 256)
-            top_p = float(arg_dict.get("top_p", 0.7))
-            temperature = float(arg_dict.get("temperature", 1.0))
             history = arg_dict.get("history", [])
-            logger.info("Query - {}".format(query))
-            if answer_prefix:
-                logger.info(f"answer_prefix - {answer_prefix}")
             history = history[-MAX_HISTORY:]
-            if len(history) > 0:
-                logger.info("History - {}".format(history))
-
             history = [tuple(h) for h in history]
             inputs = {
                 "tokenizer": tokenizer,
-                "query": query,
-                "answer_prefix": answer_prefix,
-                "max_length": max_length,
-                "top_p": top_p,
-                "temperature": temperature,
+                "query": arg_dict["query"],
+                "answer_prefix": arg_dict.get("answer_prefix", ""),
+                "max_length": arg_dict.get("max_length", DEFAULT_MAX_LENGTH),
+                "top_p": float(arg_dict.get("top_p", 0.7)),
+                "temperature": float(arg_dict.get("temperature", 1.0)),
                 "allow_generate": allow_generate,
                 "history": history,
             }
-            return StreamingResponse(decorate(model.predict_continue(**inputs)))
+            logData = inputs.copy()
+            del logData["tokenizer"]
+            del logData["allow_generate"]
+            logData["sessionIndex"] = sessionIndex
+
+            logger.info(
+                "Inputs {} - {}".format(
+                    sessionIndex, json.dumps(logData, ensure_ascii=False)
+                )
+            )
+            return StreamingResponse(
+                decorate(model.my_stream_chat(**inputs), sessionIndex)
+            )
         except Exception as e:
-            logger.error(f"error: {e}")
-            return "ERROR"
+            return StreamingResponse(alertError(e, sessionIndex))
 
     @app.post("/interrupt")
     def interrupt():
         allow_generate[0] = False
-        logger.error("Interrupted.")
+        logger.info("Interrupted.")
         return {"message": "OK", "success": True}
 
-    @app.post("/check")
-    def check_queue():
-        return {
-            "message": "generating" if allow_generate[0] else "idle",
-            "generating": allow_generate[0],
-            "success": True,
-        }
-
-    logger.info("Starting server...")
+    logger.info("System - Server started.")
+    serverParams = {
+        "host": http_address,
+        "port": port,
+        "quantize_level": quantize_level,
+        "max_history": MAX_HISTORY,
+        "default_max_length": DEFAULT_MAX_LENGTH,
+    }
+    logger.info(f"System - Confgis = { json.dumps(serverParams, ensure_ascii=False)}")
     uvicorn.run(app=app, host=http_address, port=port)
 
 
@@ -124,4 +135,4 @@ if __name__ == "__main__":
         "--port", "-P", help="port of this service", default=default_port
     )
     args = parser.parse_args()
-    start_server(args.quantize, args.host, int(args.port))
+    start_server(int(args.quantize), args.host, int(args.port))

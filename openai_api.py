@@ -12,9 +12,9 @@ from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 from starlette.responses import StreamingResponse
 from typing import Any, Dict, List, Literal, Optional, Union
-from model import getTokenizerAndModel
+from my_model import get_tokenizer_and_model
 
-tokenizer, model = getTokenizerAndModel()
+tokenizer, model = get_tokenizer_and_model()
 
 
 @asynccontextmanager
