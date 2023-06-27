@@ -42,10 +42,8 @@ def my_build_inputs(
 ):
     prompt = ""
     for i, (old_query, response) in enumerate(history):
-        prompt += "[Round {}]\n\n问：{}\n\n答：{}\n\n".format(i + 1, old_query, response)
-    prompt += "[Round {}]\n\n问：{}\n\n答：{}".format(
-        len(history) + 1, query, answer_prefix
-    )
+        prompt += f"[Round {i + 1}]\n\n问：{old_query}\n\n答：{response}\n\n"
+    prompt += f"[Round {len(history) + 1}]\n\n问：{query}\n\n答：{answer_prefix}"
     inputs = tokenizer([prompt], return_tensors="pt")
     inputs = inputs.to(self.device)
     return inputs
